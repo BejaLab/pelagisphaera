@@ -1,0 +1,10 @@
+channels:
+ - conda-forge
+ - bioconda
+dependencies:
+ - blast=2.11.0
+ - seqkit=2.2.0
+ - mafft=7.475
+ - trimal=1.4.1
+ - csvkit=1.0.7
+ - parallel=20220522

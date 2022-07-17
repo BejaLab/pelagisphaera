@@ -1,0 +1,248 @@
+
+genomes ,= glob_wildcards("input/genomes/{genome}.fna")
+outgroups ,= glob_wildcards("input/outgroups/{genome}.faa")
+
+rule all:
+    input:
+        "output/biogeography.pdf",
+        "output/AF.pdf"
+        # "analysis/usearch/ncbi.b6"
+
+rule makeblastdb:
+    input:
+        "input/genomes/{genome}.fna"
+    output:
+        "analysis/blastdb/{genome}.ndb"
+    params:
+        db = "analysis/blastdb/{genome}"
+    conda:
+        "envs/tools.yaml"
+    shell:
+        "makeblastdb -in {input} -out {params.db} -dbtype nucl"
+
+rule blastn_16s:
+    input:
+        query = "metadata/16S.fna",
+        ndb = "analysis/blastdb/{genome}.ndb",
+    output:
+        "analysis/16S/genomes/{genome}.fna"
+    params:
+        db = "analysis/blastdb/{genome}"
+    conda:
+        "envs/tools.yaml"
+    shell:
+        "blastn -query {input.query} -db {params.db} -evalue 1e-10 -outfmt '6 sseq' | tr -d - | xargs -rn1 printf '>%s\\n%s\\n' {wildcards.genome} > {output}"
+
+rule cat_16s:
+    input:
+        "metadata/ssu-genbank.fasta",
+        expand("analysis/16S/genomes/{genome}.fna", genome = genomes)
+    output:
+        "analysis/16S/ssu.fna"
+    conda:
+        "envs/tools.yaml"
+    shell:
+        "cat {input} | seqkit rmdup -o {output}"
+
+rule mafft:
+    input:
+        "analysis/16S/ssu.fna"
+    output:
+        "analysis/16S/ssu-all.mafft"
+    conda:
+        "envs/tools.yaml"
+    shell:
+        "mafft --preservecase {input} > {output}"
+
+rule trim_mafft:
+    input:
+        "analysis/16S/ssu-all.mafft"
+    output:
+        "analysis/16S/ssu-all.fasta"
+    conda:
+        "envs/tools.yaml"
+    shell:
+        "trimal -in {input} -out {output} -nogaps"
+
+rule extract_long:
+    input:
+        "analysis/16S/ssu.fna"
+    output:
+        "analysis/16S/ssu-long.fasta"
+    params:
+        min_len = 1400
+    conda:
+        "envs/tools.yaml"
+    shell:
+        "seqkit seq -gm {params.min_len} -o {output} {input}"
+
+rule taxonomy:
+    input:
+        ssu_long = "analysis/16S/ssu-long.fasta",
+        ssu_MGs  = "analysis/16S/ssu-all.fasta",
+        clusters   = "input/upstream/Opitutales_fastANI_clusters.txt",
+        gtdbtk     = "input/upstream/gtdbtk_taxonomy.tsv",
+        rhodopsins = "input/upstream/Verrucomicrobia_MGs.txt",
+        assemblies = "metadata/contigs.tsv",
+        tree = "analysis/phylogeny_phylophlan/phylogeny.tre.treefile",
+        drep = "analysis/drep/data_tables/Ndb.csv"
+    output:
+        phylogeny = "output/phylogeny.svg",
+        AF  = "output/AF.pdf",
+        ANI = "output/ANI.pdf",
+        SSU = "output/SSU.pdf",
+        SSU_short = "output/SSU_short.pdf"
+    params:
+        outgroups = outgroups
+    conda:
+        "envs/r_taxonomy.yaml"
+    script:
+        "scripts/taxonomy.R"
+
+rule drep:
+    input:
+        expand("input/genomes/{genome}.fna", genome = genomes)
+    output:
+        outdir = directory("analysis/drep"),
+        csv = "analysis/drep/data_tables/Ndb.csv"
+    conda:
+        "envs/drep.yaml"
+    threads:
+        workflow.cores
+    shell:
+        "dRep compare {output.outdir} -p {threads} --SkipMash --S_algorithm gANI -g {input}"
+
+rule phylophlan_input:
+    input:
+        expand("input/proteins/{genome}.faa", genome = genomes),
+        expand("input/outgroups/{genome}.faa", genome = outgroups)
+    output:
+        directory("analysis/phylogeny")
+    shell:
+        "mkdir {output} && cp {input} {output}/"
+
+# NB: usearch not under conda
+rule phylophlan:
+    input:
+        work_dir = "analysis/phylogeny",
+        cfg = "metadata/phylophlan.cfg",
+        maas = "metadata/phylophlan.tsv"
+    output:
+        treefile = "analysis/phylogeny_phylophlan/phylogeny.tre.treefile"
+    conda:
+        "envs/phylophlan.yaml"
+    threads:
+        workflow.cores
+    shell:
+        "phylophlan -i {input.work_dir} -t a -f {input.cfg} --diversity low --subsample full -d phylophlan --nproc {threads} --output_folder analysis --verbose --maas {input.maas}"
+
+rule mgs_list:
+    input:
+        "metadata/MGs.txt"
+    output:
+        "analysis/MGs/MG_ids.txt"
+    shell:
+        "cut -f1 {input} > {output}"
+
+rule mgs_select_OG:
+    input:
+        tsv = "databases/OM-RGC/OM-RGC_v2.tsv",
+        txt = "analysis/MGs/MG_ids.txt"
+    output:
+        "analysis/MGs/OM-RGC_v2_all.csv"
+    conda:
+        "envs/tools.yaml"
+    shell:
+        "csvgrep -tc OG -f {input.txt} {input.tsv} > {output}"
+
+rule mgs_meta:
+    input:
+        "analysis/MGs/OM-RGC_v2_all.csv"
+    output:
+        csv = "analysis/MGs/OM-RGC_v2_meta.csv",
+        txt = "analysis/MGs/OM-RGC_v2_ids.txt"
+    conda:
+        "envs/tools.yaml"
+    shell:
+        "csvcut -c OM-RGC_ID,OG,Phylum {input} | tee {output.csv} | csvcut -c OM-RGC_ID | sed 1d > {output.txt}"
+
+rule mgs_profiles:
+    input:
+        tsv = "databases/OM-RGC/OM-RGC_v2_gene_profile_metaG.tsv",
+        txt = "analysis/MGs/OM-RGC_v2_ids.txt"
+    output:
+        "analysis/MGs/OM-RGC_v2_profile.csv"
+    conda:
+        "envs/tools.yaml"
+    shell:
+        "csvgrep -tc OMRGC_ID -f {input.txt} {input.tsv} > {output}"
+
+rule mgs_fasta:
+    input:
+        "analysis/MGs/OM-RGC_v2_all.csv"
+    output:
+        "analysis/MGs/OM-RGC_v2.fasta"
+    conda:
+        "envs/tools.yaml"
+    shell:
+        "csvcut -c OM-RGC_ID,sequence {input} | csvformat -T | sed 1d | seqkit tab2fx -o {output}"
+
+# NB: usearch not under conda
+rule mgs_usearch_pelagi:
+    input:
+        query = "analysis/MGs/OM-RGC_v2.fasta",
+        db    = "input/proteins/{genome}.faa"
+    output:
+        "analysis/usearch/{genome}.b6"
+    params:
+        ident = 0.95
+    shell:
+        "usearch -usearch_global {input.query} -db {input.db} -id {params.ident} -blast6out {output}"
+
+# NB: usearch not under conda
+rule mgs_usearch:
+    input:
+        query = "analysis/MGs/OM-RGC_v2.fasta",
+        genbank = "databases/ncbi/genbank",
+        refseq  = "databases/ncbi/refseq"
+    output:
+        "analysis/usearch/ncbi.b6"
+    params:
+        ident = 0.5
+    conda:
+        "envs/tools.yaml"
+    threads:
+        workflow.cores
+    shell:
+        "parallel -j{threads} --tagstring {{/.}} usearch -threads 1 -usearch_global {input.query} -db {{}} -id {params.ident} -blast6out /dev/stdout ::: {input.genbank}/*.faa {input.refseq}/*.faa > {output}"
+
+rule usearch_90:
+    input:
+        "analysis/usearch/ncbi.b6"
+    output:
+        "analysis/usearch/ncbi_90.b6"
+    shell:
+        "awk '$4>90' {input} > {output}"
+
+rule mgs_plot:
+    input:
+        salazar = "metadata/Salazar_et_al_2019_Suppl_Info.xlsx",
+        mgs     = "metadata/MGs.txt",
+        pelagi  = "metadata/Pelagi_metadata.txt",
+        om_rgc  = "analysis/MGs/OM-RGC_v2_meta.csv",
+        profile = "analysis/MGs/OM-RGC_v2_profile.csv",
+        usearch = "analysis/usearch/ncbi_90.b6",
+        taxonomy = "databases/GTDBtk/gtdbtk_taxonomy.tsv"
+    output:
+        cogcor   = "output/cogcor.pdf",
+        outliers = "output/outliers.pdf",
+        pr_blh   = "output/PR_blh.pdf",
+        biogeography = "output/biogeography.pdf",
+        layers   = "output/layers.pdf"
+    params:
+        genus = "Pelagisphaera",
+        gtdb_genus = "UBA5691"
+    conda:
+        "envs/r_mgs.yaml"
+    script:
+        "scripts/MGs.R"

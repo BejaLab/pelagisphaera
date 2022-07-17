@@ -1,0 +1,17 @@
+channels:
+ - conda-forge
+ - bioconda
+dependencies:
+ - r=4.1
+ - r-gplots=3.1.3
+ - bioconductor-biostrings=2.62.0
+ - r-readr=2.1.2
+ - r-stringr=1.4.0
+ - bioconductor-treeio=1.18.0
+ - bioconductor-ggtree=3.2.0
+ - r-tibble=3.1.7
+ - r-tidyr=1.2.0
+ - r-dplyr=1.0.9
+ - r-seqinr=4.2_16
+ - r-ggstance=0.3.5
+ - r-svglite

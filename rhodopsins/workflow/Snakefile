@@ -1,0 +1,538 @@
+
+from os.path import isfile
+from glob import glob
+import shutil
+
+num_trees = 10
+
+gtdbtk = "metadata/genomes/gtdbtk_taxonomy.tsv"
+phylum = "p__Verrucomicrobiota"
+order = "o__Opitutales"
+
+order_accessions = []
+phylum_accessions = []
+with open(gtdbtk) as fd:
+    for line in fd:
+        acc, acc_gtdb, taxa = line.split('\t')
+        for taxon in taxa.split(';'):
+            if taxon == order:
+                order_accessions.append(acc)
+            elif taxon == phylum:
+                phylum_accessions.append(acc)
+
+rule all:
+    input:
+        "output/rhodopsins.svg",
+        "output/phylum_tree.svg",
+        "output/order_tree.svg"
+
+checkpoint order_dRep:
+    input:
+        expand("input/ncbi/{acc}.fna", acc = order_accessions)
+    output:
+        directory("analysis/dRep")
+    params:
+        pa = 0.9,
+        sa = 0.95,
+        nc = 0.3,
+        cm = "larger"
+    conda:
+        "envs/dRep.yaml"
+    threads:
+        workflow.cores
+    shell:
+        "dRep dereplicate {output} -pa {params.pa} -sa {params.sa} -nc {params.nc} -cm {params.cm} -p {threads} --ignoreGenomeQuality -g {input}"
+
+def drep_faa(wildcards):
+    drep_dir = checkpoints.order_dRep.get().output[0]
+    output = []
+    for acc in order_accessions:
+        fna = "%s/dereplicated_genomes/%s.fna" % (drep_dir, acc)
+        faa = "input/ncbi/%s.faa" % acc
+        if isfile(fna):
+            output.append(faa)
+    return output
+
+rule order_phylophlan_input:
+    input:
+        drep_faa
+    output:
+        directory("analysis/phylogeny")
+    shell:
+        "mkdir -p {output} && cp {input} {output}/"
+
+# NB: usearch not under conda
+rule order_phylophlan:
+    input:
+        work_dir = "analysis/phylogeny",
+        cfg = "metadata/genomes/phylophlan.cfg",
+        maas = "metadata/genomes/phylophlan.tsv"
+    output:
+        protected("analysis/phylogeny_phylophlan/phylogeny.tre.treefile")
+    conda:
+        "envs/phylophlan.yaml"
+    threads:
+        workflow.cores
+    shell:
+        "phylophlan -i {input.work_dir} -t a -f {input.cfg} --diversity medium -d phylophlan --output_folder analysis --nproc {threads} --verbose --maas {input.maas}"
+
+rule order_phylophlan_root:
+    input:
+        outgroup = "metadata/genomes/outgroups.txt",
+        treefile = "analysis/phylogeny_phylophlan/phylogeny.tre.treefile"
+    output:
+        "analysis/phylogeny_phylophlan/phylogeny.tre.treefile.rooted"
+    conda:
+        "envs/nw_tools.yaml"
+    shell:
+        "xargs nw_reroot -s {input.treefile} < {input.outgroup} > {output}"
+
+rule parse_biosamples:
+    input:
+        expand("input/ncbi/{acc}.biosample.xml", acc = phylum_accessions)
+    output:
+        "analysis/biosample/biosamples.tsv"
+    params:
+        ext = ".biosample.xml"
+    conda:
+        "envs/r.yaml"
+    script:
+        "scripts/biosamples.R"
+
+rule extract_phylum:
+    input:
+        "input/gtdbtk_output/gtdbtk.bac120.classify.tree"
+    output:
+        "analysis/tree/phylum.tree"
+    params:
+        phylum = phylum
+    conda:
+        "envs/tools.yaml"
+    shell:
+        "nw_labels -L {input} | grep {params.phylum} | xargs -d '\\n' nw_clade {input} | tr ';' '|' | sed -E 's/\|$/;/' > {output}"
+
+rule phylum_tree_plot:
+    input:
+        biosamples = "analysis/biosample/biosamples.tsv",
+        gtdbtk_tree = "input/gtdbtk_output/gtdbtk.bac120.classify.tree",
+        gtdbtk_taxonomy = "metadata/genomes/gtdbtk_taxonomy.tsv",
+        rhodopsins = "analysis/fasta/rhodopsins.txt",
+        family_colors = "metadata/family_colors.txt",
+        habitat_colors = "metadata/habitat_colors.txt",
+        dRep = "analysis/dRep"
+    output:
+        "output/phylum_tree.svg"
+    params:
+        shallow_threshold = 0.1,
+        outlier_threshold = 1.5,
+        phylum = phylum
+    conda:
+        "envs/r.yaml"
+    script:
+        "scripts/phylum_tree.R"
+
+rule order_tree_plot:
+    input:
+        biosamples = "analysis/biosample/biosamples.tsv",
+        phylophlan = "analysis/phylogeny_phylophlan/phylogeny.tre.treefile.rooted",
+        gtdbtk_taxonomy = "metadata/genomes/gtdbtk_taxonomy.tsv",
+        gtdbtk_tree = "input/gtdbtk_output/gtdbtk.bac120.classify.tree",
+        rhodopsins = "analysis/fasta/rhodopsins.txt",
+        family_colors = "metadata/family_colors.txt",
+        habitat_colors = "metadata/habitat_colors.txt"
+    output:
+        "output/order_tree.svg"
+    params:
+        order = order
+    conda:
+        "envs/r.yaml"
+    script:
+        "scripts/phylum_tree.R"
+
+rule hmmsearch_all:
+    input:
+        fasta = "input/ncbi/{acc}.faa",
+        hmm = "metadata/rhodopsins/Microbial_rhodopsin.hmm"
+    output:
+        out = "analysis/hmmsearch_all/{acc}.out",
+        tblout = "analysis/hmmsearch_all/{acc}.tblout"
+    conda:
+        "envs/tools.yaml"
+    shell:
+        "hmmsearch --tblout {output.tblout} -o {output.out} {input.hmm} {input.fasta}"
+
+rule faidx:
+    input:
+        "{prefix}"
+    output:
+        "{prefix}.fai"
+    conda:
+        "envs/tools.yaml"
+    shell:
+        "seqkit faidx {input}"
+
+rule hmmsearch_all_fasta:
+    input:
+        tblout = "analysis/hmmsearch_all/{acc}.tblout",
+        fasta = "input/ncbi/{acc}.faa",
+        fai = "input/ncbi/{acc}.faa.fai"
+    output:
+        "analysis/hmmsearch_all/{acc}.faa"
+    params:
+        evalue = 1e-5
+    conda:
+        "envs/tools.yaml"
+    shell:
+        "awk '!/^#/&&$5<{params.evalue}{{print$1}}' {input.tblout} | sort -u | xargs -r seqkit faidx {input.fasta} > {output}"
+
+rule hmmsearch_all_fasta_cat:
+    input:
+        expand("analysis/hmmsearch_all/{acc}.faa", acc = phylum_accessions)
+    output:
+        "analysis/fasta/rhodopsins.fasta"
+    conda:
+        "envs/tools.yaml"
+    threads:
+        workflow.cores
+    shell:
+        "parallel -j {threads} --tagstring {{/.}} seqkit fx2tab ::: {input} | sed 's/\\t/@/' | seqkit tab2fx -o {output}"
+
+rule align_refs:
+    input:
+        "metadata/rhodopsins/known.fasta", "metadata/rhodopsins/other.fasta"
+    output:
+        "analysis/refs/PRXR.sto"
+    conda:
+        "envs/tools.yaml"
+    threads:
+        10
+    shell:
+        "seqkit rmdup -s {input} | mafft --thread {threads} --auto - | reformat.pl fas sto /dev/stdin /dev/stdout -M 50 -v 0 | sed 's/#=GF DE.*/#=GF DE PRXR/' > {output}"
+
+rule hmmbuild:
+    input:
+        "analysis/refs/PRXR.sto"
+    output:
+        "analysis/refs/PRXR.hmm"
+    conda:
+        "envs/tools.yaml"
+    shell:
+        "hmmbuild -n PRXR {output} {input}"
+
+rule hmmsearch_prxr:
+    input:
+        hmm = "analysis/refs/PRXR.hmm",
+        faa = "analysis/fasta/rhodopsins.fasta"
+    output:
+        "analysis/hmmsearch_prxr/rhodopsins.tblout"
+    conda:
+        "envs/tools.yaml"
+    shell:
+        "hmmsearch -o /dev/null --tblout {output} {input.hmm} {input.faa}"
+
+rule faidx_f:
+    input:
+        "{prefix}"
+    output:
+        "{prefix}.seqkit.fai"
+    conda:
+        "envs/tools.yaml"
+    shell:
+        "seqkit faidx -f {input}"
+
+rule extract_hits:
+    input:
+        fai = "analysis/fasta/rhodopsins.fasta.seqkit.fai",
+        faa = "analysis/fasta/rhodopsins.fasta",
+        tblout = "analysis/hmmsearch_prxr/rhodopsins.tblout"
+    output:
+        "analysis/hmmsearch_prxr/rhodopsins.fasta"
+    params:
+        score = 160 # empirical value
+    conda:
+        "envs/tools.yaml"
+    shell:
+        "grep -v '^#' {input.tblout} | awk '$6>{params.score}' | cut -f1 -d' ' | xargs seqkit faidx -f {input.faa} > {output}"
+
+rule combine_fasta:
+    input:
+        "metadata/rhodopsins/known.fasta",
+        "input/rhodopsins/P_uniprot.fasta",
+        "input/rhodopsins/P_uniparc.fasta",
+        "analysis/hmmsearch_prxr/rhodopsins.fasta",
+        "input/rhodopsins/outgroups.fasta"
+    output:
+        "analysis/fasta/combined.fasta"
+    conda:
+        "envs/tools.yaml"
+    shell:
+        "seqkit rmdup {input} -o {output}"
+
+rule cdhit_combined:
+    input:
+        "analysis/fasta/combined.fasta"
+    output:
+        "analysis/fasta/combined_100.cdhit"
+    conda:
+        "envs/tools.yaml"
+    shell:
+        "cdhit -i {input} -o {output} -c 1 -d 0"
+
+rule add_gpr:
+    input:
+        gpr = "metadata/rhodopsins/GPR.fasta",
+        cdhit = "analysis/fasta/combined_100.cdhit"
+    output:
+        "analysis/fasta/combined_100.cdhit.mafft"
+    conda:
+        "envs/tools.yaml"
+    shell:
+        "mafft --addfragments {input.cdhit} --keeplength {input.gpr} > {output}"
+
+rule filter_lys:
+    input:
+        "analysis/fasta/combined_100.cdhit.mafft"
+    output:
+        "analysis/fasta/combined_100.cdhit.no_lys"
+    params:
+        pos = 231,
+        res = "K"
+    conda:
+        "envs/tools.yaml"
+    shell:
+        "seqkit subseq -r {params.pos}:{params.pos} {input} | seqkit grep -svp {params.res} | seqkit seq -nio {output}"
+
+rule filter_arg:
+    input:
+        "analysis/fasta/combined_100.cdhit.mafft"
+    output:
+        "analysis/fasta/combined_100.cdhit.no_arg"
+    params:
+        pos = 94,
+        res = "R"
+    conda:
+        "envs/tools.yaml"
+    shell:
+        "seqkit subseq -r {params.pos}:{params.pos} {input} | seqkit grep -svp {params.res} | seqkit seq -nio {output}"
+
+rule filter_seq:
+    input:
+        cdhit = "analysis/fasta/combined_100.cdhit",
+        no_lys = "analysis/fasta/combined_100.cdhit.no_lys",
+        outliers = "metadata/rhodopsins/outliers.txt"
+    output:
+        "analysis/fasta/combined_100.cdhit.filtered"
+    conda:
+        "envs/tools.yaml"
+    shell:
+        "cat {input.no_lys} {input.outliers} | seqkit grep -vf- -o {output} {input.cdhit}"
+
+rule cdhit_90:
+    input:
+        "analysis/fasta/combined_100.cdhit.filtered"
+    output:
+        cdhit = "analysis/fasta/combined_90.cdhit",
+        clstr = "analysis/fasta/combined_90.cdhit.clstr"
+    params:
+        c = 0.9
+    conda:
+        "envs/tools.yaml"
+    shell:
+        "cdhit -i {input} -o {output.cdhit} -c {params.c} -d 0"
+
+rule cdhit_80:
+    input:
+        "analysis/fasta/combined_90.cdhit"
+    output:
+        cdhit = "analysis/fasta/combined_80.cdhit",
+        clstr = "analysis/fasta/combined_80.cdhit.clstr"
+    params:
+        c = 0.8,
+        n = 2
+    conda:
+        "envs/tools.yaml"
+    shell:
+        "cdhit -i {input} -o {output.cdhit} -c {params.c} -n {params.n} -d 0"
+
+rule cdhit_70:
+    input:
+        "analysis/fasta/combined_80.cdhit"
+    output:
+        cdhit = "analysis/fasta/combined_70.cdhit",
+        clstr = "analysis/fasta/combined_70.cdhit.clstr"
+    params:
+        c = 0.7,
+        n = 2
+    conda:
+        "envs/tools.yaml"
+    shell:
+        "cdhit -i {input} -o {output.cdhit} -c {params.c} -n {params.n} -d 0"
+
+rule cdhit_60:
+    input:
+        "analysis/fasta/combined_70.cdhit"
+    output:
+        cdhit = "analysis/fasta/combined_60.cdhit",
+        clstr = "analysis/fasta/combined_60.cdhit.clstr"
+    params:
+        c = 0.6,
+        n = 2
+    conda:
+        "envs/tools.yaml"
+    shell:
+        "cdhit -i {input} -o {output.cdhit} -c {params.c} -n {params.n} -d 0"
+
+rule rhod_list_rmdup:
+    input:
+        "metadata/rhodopsins/rhodopsin_list.fasta"
+    output:
+        "metadata/fasta/rhodopsin_list.fasta"
+    conda:
+        "envs/tools.yaml"
+    shell:
+        "seqkit rmdup -s -o {output} {input}"
+
+rule rhod_list_makeblastdb:
+    input:
+        "metadata/fasta/rhodopsin_list.fasta"
+    output:
+        "metadata/fasta/rhodopsin_list.fasta.pdb"
+    conda:
+        "envs/tools.yaml"
+    shell:
+        "makeblastdb -in {input} -dbtype prot"
+
+rule blastp:
+    input:
+        db = "metadata/fasta/rhodopsin_list.fasta",
+        pdb = "metadata/fasta/rhodopsin_list.fasta.pdb",
+        query = "analysis/fasta/rhodopsins.fasta"
+    output:
+        "analysis/fasta/rhodopsins.blastp"
+    params:
+        evalue = "1e-10"
+    conda:
+        "envs/tools.yaml"
+    threads:
+        20
+    shell:
+        "blastp -max_target_seqs 1 -num_threads {threads} -query {input.query} -db {input.db} -outfmt '6 qseqid pident stitle' -out {output}"
+
+rule usearch:
+    input:
+        db = "analysis/fasta/combined_60.cdhit",
+        query = "analysis/fasta/rhodopsins.fasta"
+    output:
+        "analysis/fasta/rhodopsins.usearch"
+    params:
+        ident = 0.5
+    conda:
+        "envs/tools.yaml"
+    shell:
+        "usearch -usearch_global {input.query} -db {input.db} -id {params.ident} -blast6out {output}"
+
+rule assign_family:
+    input:
+        usearch = "analysis/fasta/rhodopsins.usearch",
+        blastp = "analysis/fasta/rhodopsins.blastp"
+    output:
+        "analysis/fasta/rhodopsins.txt"
+    conda:
+        "envs/r.yaml"
+    script:
+        "scripts/assign_families.R"
+
+rule mafft:
+    input:
+        "analysis/fasta/combined_{ident}.cdhit"
+    output:
+        "analysis/fasta/combined_{ident}.mafft"
+    conda:
+        "envs/tools.yaml"
+    threads:
+        10
+    shell:
+        "mafft --thread {threads} --auto {input} > {output}"
+
+rule trimal:
+    input:
+        "analysis/fasta/combined_{ident}.mafft"
+    output:
+        "analysis/fasta/combined_{ident}.trimal"
+    params:
+        gt = 0.5
+    conda:
+        "envs/tools.yaml"
+    shell:
+        "trimal -in {input} -out {output}"
+
+rule iqtree:
+    input:
+        "analysis/fasta/combined_60.trimal"
+    output:
+        "analysis/iqtree/combined_{seed}.treefile",
+        "analysis/iqtree/combined_{seed}.log"
+    params:
+        prefix = "analysis/iqtree/combined_{seed}",
+        pers = 0.2,
+        nstop = 500
+    conda:
+        "envs/tools.yaml"
+    threads:
+        3
+    shell:
+        "iqtree2 -s {input} --prefix {params.prefix} -redo -seed {wildcards.seed} -B 1000 -nt {threads} -pers {params.pers} -nstop {params.nstop}"
+
+rule pick_best:
+    input:
+        logs  = expand("analysis/iqtree/combined_{seed}.log",      seed = range(num_trees)),
+        trees = expand("analysis/iqtree/combined_{seed}.treefile", seed = range(num_trees))
+    output:
+        tree = "analysis/iqtree/combined.treefile",
+        log  = "analysis/iqtree/combined.log"
+    run:
+        best_score = float("-inf")
+        best_i = -1
+        for i in range(len(input.logs)):
+            with open(input.logs[i]) as fd:
+                for line in fd:
+                    if line.startswith("BEST SCORE FOUND"):
+                        score = float(line.split()[-1])
+                        if score > best_score:
+                            best_i = i
+                            best_score = score
+        shutil.copyfile(input.trees[best_i], output.tree)
+        shutil.copyfile(input.logs[best_i],  output.log)
+
+rule taxize:
+    input:
+        "input/rhodopsins/P_uniparc.tab", "input/rhodopsins/P_uniprot.tab"
+    output:
+        "analysis/taxize/taxize.tsv"
+    conda:
+        "envs/r.yaml"
+    script:
+        "scripts/taxize.R"
+
+rule iqtree_plot_rhodopsins:
+    input:
+        treefile = "analysis/iqtree/combined.treefile",
+        metadata = "metadata/rhodopsins/rhodopsins.tsv",
+        uniparc_tab = "input/rhodopsins/P_uniparc.tab",
+        uniprot_tab = "input/rhodopsins/P_uniprot.tab",
+        unitax = "analysis/taxize/taxize.tsv",
+        mafft = "analysis/fasta/combined_100.cdhit.mafft",
+        taxonomy = "metadata/genomes/gtdbtk_taxonomy.tsv",
+        clstr60  = "analysis/fasta/combined_60.cdhit.clstr",
+        clstr70  = "analysis/fasta/combined_70.cdhit.clstr",
+        clstr80  = "analysis/fasta/combined_80.cdhit.clstr",
+        clstr90  = "analysis/fasta/combined_90.cdhit.clstr",
+        clstr100 = "analysis/fasta/combined_100.cdhit.clstr",
+        outgroups = "input/rhodopsins/outgroups.fasta"
+    output:
+        "output/rhodopsins.svg"
+    conda:
+        "envs/r.yaml"
+    script:
+        "scripts/plot_rhodopsins.R"
+
