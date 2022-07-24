@@ -60,7 +60,7 @@ tip.clust <- cophenetic(verruco.full) %>%
     arrange(!is.ref, !is.refseq, !is.cultured, cluster) %>%
     distinct(cluster, .keep_all = T)
 
-taxonomy <- read.table(gtdbtk_taxonomy, col.names = c("label1", "label2", "classification"), header = T, sep = "\t")
+taxonomy <- read.table(gtdbtk_taxonomy, col.names = c("label1", "label2", "classification"), header = F, sep = "\t")
 taxonomy <- bind_rows(
          select(taxonomy, label = label1, classification),
          select(taxonomy, label = label2, classification)

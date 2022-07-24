@@ -3,7 +3,6 @@ library(dplyr)
 library(treeio)
 library(ggtree)
 library(phangorn)
-library(bioformatr)
 library(seqinr)
 library(tidyr)
 library(taxize)
@@ -11,29 +10,6 @@ library(tidyverse)
 library(castor)
 library(ggnewscale)
 
-if (interactive()) {
-    Snakemake <- setClass("Snakemake", slots = list(input = "list", output = "list", params = "list"))
-    snakemake <- Snakemake(
-            input = list(
-            treefile = "analysis/iqtree/combined.treefile",
-            metadata = "metadata/metadata.txt",
-            uniparc_tab = "input/P_uniparc.tab",
-            uniprot_tab = "input/P_uniprot.tab",
-            mafft = "analysis/fasta/combined_100.cdhit.mafft",
-            taxonomy = "metadata/gtdbtk_taxonomy.tsv",
-            clstr60  = "analysis/fasta/combined_60.cdhit.clstr",
-            clstr70  = "analysis/fasta/combined_70.cdhit.clstr",
-            clstr80  = "analysis/fasta/combined_80.cdhit.clstr",
-            clstr90  = "analysis/fasta/combined_90.cdhit.clstr",
-            clstr100 = "analysis/fasta/combined_100.cdhit.clstr",
-            taxize   = "analysis/taxize/taxize.tsv",
-            outgroups = "input/outgroups.fasta"
-        ),
-        output = list(
-            "output/rhodopsins.svg"
-        )
-    )
-}
 with(snakemake@input, {
     uniparc_tab    <<- uniparc_tab
     uniprot_tab    <<- uniprot_tab
@@ -48,8 +24,13 @@ with(snakemake@input, {
     treefile       <<- treefile
     taxize_file    <<- taxize
     outgroup_file  <<- outgroups
+    family_colors_file <<- family_colors
+    rhodopsins_file <<- rhodopsins
 })
 output_file <- unlist(snakemake@output)
+
+rhodopsins <- read.table(rhodopsins_file, header = T) %>%
+    mutate(Entry = paste(label, locus_tag, sep = "@"))
 
 read.cdhit.clstr <- function(fname) {
     data.fields <- c("E.Value", "Aln", "Identity")
@@ -71,8 +52,6 @@ read.cdhit.clstr <- function(fname) {
         ungroup
 }
 
-metadata <- read.table(metadata_file, sep = "\t", header = T)
-
 uniparc <- read.table(uniparc_tab, sep = "\t", header = T) %>%
     select(Entry, Organism = Organisms, Organism.ID = Organism.IDs) %>%
     separate_rows(Organism, Organism.ID, sep = "; ", convert = T)
@@ -82,8 +61,8 @@ unitab <- bind_rows(uniparc, uniprot)
 
 ncbi.tax <- read.table(taxize_file, sep = "\t", col.names = c("Organism.ID", "taxgroup"))
 
-metadata <- read.table(metadata_file, sep = "\t", header = T, na.string = "") %>%
-    arrange(is.na(Known)) %>%
+metadata <- read.table(metadata_file, sep = "\t", header = T, na.string = "", fill = T) %>%
+    arrange(is.na(Activity)) %>%
     distinct(Entry, .keep_all = T)
 
 #rhodopsins <- read.table("Verrucomicrobia_all.txt", header = T) %>%
@@ -98,9 +77,13 @@ GPR <- read.fasta(mafft_file, seqtype = "AA") %>%
     spread(pos, 3) %>%
     select(Entry, D85 = !!motif[1], T89 = !!motif[2], D96 = !!motif[3])
 
-verruco <- read.table(taxonomy_file, col.names = c("assembly", "gtdb"), sep = "\t") %>%
+verruco <- read.table(taxonomy_file, col.names = c("label1", "label2", "gtdb"), sep = "\t") %>%
     filter(grepl("p__Verrucomicrobiota", gtdb)) %>%
-    pull(assembly)
+    select(label1, label2) %>%
+    as.matrix %>% c %>%
+    unique
+colors.families <- read.table(family_colors_file, sep = "\t", comment.char = "") %>%
+    with(setNames(V2, V1))
 
 clstr60  <- read.cdhit.clstr(clstr60_file) %>%
     select(Representative_70 = Seq.Name, Representative_60 = Representative)
@@ -120,6 +103,7 @@ clstr100 <- read.cdhit.clstr(clstr100_file) %>%
     left_join(ncbi.tax, by = "Organism.ID") %>%
     left_join(GPR, by = "Entry") %>%
     left_join(metadata, by = "Entry") %>%
+    left_join(rhodopsins, by = "Entry") %>%
     filter(!is.na(Representative_60)) %>%
     separate(Entry, into = c("assembly", "locus_tag"), sep = "@", fill = "right", remove = F) %>%
     mutate(taxgroup = ifelse(!is.na(assembly) & assembly %in% verruco, "Verrucomicrobia", ifelse(taxgroup == "Verrucomicrobia", NA, taxgroup))) %>%
@@ -128,17 +112,31 @@ clstr100 <- read.cdhit.clstr(clstr100_file) %>%
     ungroup %>%
     arrange(-taxgroup_n) %>%
     group_by(Representative_60) %>%
-    mutate(Known = first(na.omit(Known))) %>%
+    mutate(Activity = first(na.omit(Activity))) %>%
     mutate(Symbol = paste(unique(na.omit(Symbol)), collapse = ", ")) %>%
     mutate(Family = first(na.omit(Family))) %>%
     ungroup
 clstr <- group_by(clstr100, Representative_60, D85, T89, D96) %>%
-    mutate(n_motif = n()) %>%
+    mutate(n_motif = n(), subfamily = first(na.omit(subfamily))) %>%
     ungroup %>%
     arrange(is.na(D85), -n_motif) %>%
-          distinct(label = Representative_60, .keep_all = T) %>%
-    # left_join(rhodopsins,  by = "label") %>%
+    distinct(label = Representative_60, .keep_all = T) %>%
     mutate(label = sub("@", "_", label))
+
+missing_fams <- filter(clstr, !is.na(subfamily)) %>%
+    filter(! subfamily %in% names(colors.families)) %>%
+    distinct(subfamily)
+if (nrow(missing_fams) > 0) {
+    write(paste("The following families have unassigned colors:", paste(pull(missing_fams), collapse = ", ")), stderr())
+    q()
+}
+missing_fams <- data.frame(fam = names(colors.families)) %>%
+    filter(! fam %in% clstr$subfamily, !grepl(" ", fam)) %>%
+    distinct(fam)
+if (nrow(missing_fams) > 0) {
+    write(paste("The following families have were not found in the data:", paste(pull(missing_fams), collapse = ", ")), stderr())
+    q()
+}
 
 outgroups <- names(read.fasta(outgroup_file))
 
@@ -169,7 +167,8 @@ hsp <- hsp_max_parsimony(tree.phylo, as.numeric(families)) %>%
         mutate(hsp = levels(families)[as.numeric(hsp)])
 tree <- left_join(tree, hsp, by = "node") %>%
     mutate(hsp.parent = .[match(parent, node),"hsp"]) %>%
-    mutate(hsp = ifelse(!is.na(hsp.parent) & hsp == hsp.parent, NA, hsp))
+    mutate(hsp = ifelse(!is.na(hsp.parent) & hsp == hsp.parent, NA, hsp)) %>%
+    mutate(Ion = case_when(Activity == "chloride pump" ~ "Cl⁻", Activity == "sodium pump" ~ "Na⁺", Activity == "proton pump" ~ "H⁺", T ~ NA_character_))
 
 clustalx <- c(
     A = "BLUE",
@@ -195,33 +194,16 @@ clustalx <- c(
 )
 
 # colors.families <- c(XR_E3 = "#44aa00", PR_FW = "#00aad4", PR_Methylacidiphilales = "#008080ff", PR_F3 = "#0000ff", P5 = "#800080")
-colors.pumps    <- c(proton = "red", sodium = "magenta", chloride = "yellow4")
-verruco.clades <- c(
-        singleton                   = "darkgray",
-        `other rhodopsins`          = "gray",
-        `Clade_P5-A0A350AVH5`       = "#800080",
-        `Clade_P5-PWZW01000279_GM_1972` = "#800080",
-        `PR-DLQG01000084_GM_551`    = "#0000ff",
-        `PR-VFJU01000426_GM_2367`   = "#00aad4",
-        `PR-CAJAHL010000291_GM_2019`= "#8b93ff",
-        `XR-F7C95_05130`            = "#44aa00",
-        `XR-CAIZMQ010000037_GM_448` = "#00ff00",
-        `Clade_P4-A0A2D5AQR4` = "#ff00ff",
-        `Clade_P4-A0A2E5DYM8` = "#ff00ff",
-        `Clade_P4-A0A2E8M222` = "#ff00ff",
-        `Clade_P4-CAIVXP010000160_GM_1042` = "#ff00ff"
-)
-
 p <- ggtree(as.treedata(tree), aes(color = taxgroup), layout = "circular") +
     #geom_tiplab(aes(subset = taxgroup == "Verrucomicrobia", label = label)) +
     geom_treescale() +
-    geom_tiplab(mapping = aes(subset = !is.na(Known), label = Known), color = "red", size = 2) +
+    geom_tiplab(mapping = aes(subset = !is.na(Ion), label = Ion), color = "red", size = 2) +
     geom_point2(aes(subset = !is.na(support) & support >= 95), shape = 15, color = "darkgray") +
     new_scale_color() +
-    # geom_point2(aes(subset = !is.na(subfamily), color = subfamily)) +
-    scale_color_manual(values = verruco.clades) +
+    geom_point2(aes(subset = !is.na(subfamily), color = subfamily)) +
+    scale_color_manual(values = colors.families) +
     # geom_tiplab2(aes(label = label)) +
-    geom_tiplab(aes(subset = !is.na(Symbol), label = Symbol), offset = 0.1) +
+    geom_tiplab(aes(subset = !is.na(Symbol) & !is.na(Ion), label = Symbol), offset = 0.3) +
     new_scale_color() +
     geom_text2(aes(label = D85, color = D85, angle = angle - 90, x = 5.8), size = 2) +
     geom_text2(aes(label = T89, color = T89, angle = angle - 90, x = 6.0), size = 2) +

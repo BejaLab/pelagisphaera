@@ -139,7 +139,8 @@ rule order_tree_plot:
         gtdbtk_tree = "input/gtdbtk_output/gtdbtk.bac120.classify.tree",
         rhodopsins = "analysis/fasta/rhodopsins.txt",
         family_colors = "metadata/family_colors.txt",
-        habitat_colors = "metadata/habitat_colors.txt"
+        habitat_colors = "metadata/habitat_colors.txt",
+        dRep = "analysis/dRep"
     output:
         "output/order_tree.svg"
     params:
@@ -147,7 +148,7 @@ rule order_tree_plot:
     conda:
         "envs/r.yaml"
     script:
-        "scripts/phylum_tree.R"
+        "scripts/order_tree.R"
 
 rule hmmsearch_all:
     input:
@@ -520,7 +521,7 @@ rule iqtree_plot_rhodopsins:
         metadata = "metadata/rhodopsins/rhodopsins.tsv",
         uniparc_tab = "input/rhodopsins/P_uniparc.tab",
         uniprot_tab = "input/rhodopsins/P_uniprot.tab",
-        unitax = "analysis/taxize/taxize.tsv",
+        taxize      = "analysis/taxize/taxize.tsv",
         mafft = "analysis/fasta/combined_100.cdhit.mafft",
         taxonomy = "metadata/genomes/gtdbtk_taxonomy.tsv",
         clstr60  = "analysis/fasta/combined_60.cdhit.clstr",
@@ -528,7 +529,9 @@ rule iqtree_plot_rhodopsins:
         clstr80  = "analysis/fasta/combined_80.cdhit.clstr",
         clstr90  = "analysis/fasta/combined_90.cdhit.clstr",
         clstr100 = "analysis/fasta/combined_100.cdhit.clstr",
-        outgroups = "input/rhodopsins/outgroups.fasta"
+        outgroups = "input/rhodopsins/outgroups.fasta",
+        family_colors = "metadata/family_colors.txt",
+        rhodopsins = "analysis/fasta/rhodopsins.txt"
     output:
         "output/rhodopsins.svg"
     conda:

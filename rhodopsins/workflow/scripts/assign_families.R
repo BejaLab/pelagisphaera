@@ -16,7 +16,7 @@ read.outfmt6 <- function(fname, col.names = c("qseqid", "sseqid", "pident", "len
 blast <- read.outfmt6(usearch_file) %>%
     select(Representative = sseqid, Seq.Name = qseqid)
 read.outfmt6(blastp_file, col.names = c("Seq.Name", "pident", "stitle")) %>%
-    extract(stitle, into = "family", regex = "{(\\w+).*}") %>%
+    extract(stitle, into = c("superfamily", "family"), regex = "/([\\w?]+):(\\w+)/") %>%
     left_join(blast, by = "Seq.Name") %>%
     separate(Seq.Name, into = c("label", "locus_tag"), sep = "@") %>%
     separate(Representative, into = c("Representative_label", "Representative_locus_tag"), sep = "@", fill = "left", remove = F) %>%

@@ -9,7 +9,7 @@ library(tibble)
 library(ggnewscale)
 library(castor)
 library(ggrepel)
-library(phytools)
+# library(phytools)
 
 options(expressions = 10000)
 
@@ -38,7 +38,7 @@ outgroup <- Descendants(gtdbtk, root.node, "children") %>%
     gsub("^(GB|RS)_", "", .) %>%
     cat(sep = "\n", file = "Opitutales.")
 
-taxonomy <- read.table(gtdbtk_taxonomy, col.names = c("label1", "label2", "classification"), header = T, sep = "\t")
+taxonomy <- read.table(gtdbtk_taxonomy, col.names = c("label1", "label2", "classification"), header = F, sep = "\t")
 taxonomy <- bind_rows(
          select(taxonomy, label = label1, classification),
          select(taxonomy, label = label2, classification)
