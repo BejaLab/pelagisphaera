@@ -95,7 +95,8 @@ profiles_pelagi <- filter(profiles, OMRGC_ID %in% target_ids, Layer %in% c("DCM"
     summarize(profile = sum(profile), .groups = "drop") %>%
     spread(OG, profile) %>%
     column_to_rownames("Station")
-profiles_layers <- group_by(profiles, OMRGC_ID %in% target_ids, PANGAEA.sample.id, Layer, Station, OG) %>%
+profiles_layers <- filter(profiles, OMRGC_ID %in% target_ids) %>%
+    group_by(PANGAEA.sample.id, Layer, Station, OG) %>%
     summarize(profile = sum(profile), .groups = "drop")
 
 profiles.cor <- cor(profiles_pelagi)
@@ -202,7 +203,7 @@ pelagi_data <- filter(profiles_layers) %>%
     group_by(PANGAEA.sample.id) %>%
     mutate(MG.0 = sum(group == "MGs" & profile > 0, na.rm = T)) %>%
     group_by(group, PANGAEA.sample.id) %>%
-    summarize(profile = mean(profile), MG.0 = first(MG.0)) %>%
+    summarize(profile = mean(profile), MG.0 = first(MG.0), .groups = "drop") %>%
     spread(group, profile) %>%
     select(-`<NA>`) %>%
     left_join(profiles_all_samples, by = "PANGAEA.sample.id") %>%
@@ -213,25 +214,12 @@ pelagi_data <- filter(profiles_layers) %>%
     mutate(MG.enough = MG.0 >= MG.threshold * length(cogs.best)) %>%
     mutate(MG.ratio = MGs / MG.all, operon.ratio = operon / MGs, operon.ratio = ifelse(MG.enough, operon.ratio, ifelse(!is.nan(operon) & operon > 0, 1, 0)))
 
-PR_ratio_data <- group_by(pelagi_data, Station) %>%
-    filter(MG.0 > MG.threshold * length(cogs.best)) %>%
-    filter(any(Layer == "DCM"), any(Layer == "SRF")) %>%
-    # filter(n_distinct(Layer) > 1) %>%
-    select(Layer, Station, OS.region, operon.ratio) %>%
-    ungroup
-
-MG_ratio_data <- group_by(pelagi_data, Station) %>%
-    filter(any(MG.0 > MG.threshold * length(cogs.best)), n_distinct(Layer) > 1) %>%
-    mutate(Layer = factor(Layer, levels = c("SRF", "DCM", "MES")), OS.region = factor(OS.region), Station = factor(Station)) %>%
-    select(Layer, Station, OS.region, MG.ratio) %>%
-    ungroup
-
 p <- ggplot(filter(pelagi_data, MGs > 0), aes(x = Layer, y = MG.ratio)) +
     geom_violin(trim = F, scale = "count") +
     geom_jitter(aes(color = operon.ratio, shape = MG.enough), width = 0.05, size = 5) +
     scale_colour_gradient2(high = "darkblue", low = "black", mid = "gray") +
     scale_y_log10() +
-    scale_shape_manual(values = c("◓", "●")) +
+    scale_shape_manual(values = c(1, 16)) +
     ylab("Ca. Pelagisphaera fraction") + xlab("Layer") +
     theme_bw()
 ggsave(layers_file, p, device = cairo_pdf, width = 6, height = 6)

@@ -303,19 +303,6 @@ rule filter_lys:
     shell:
         "seqkit subseq -r {params.pos}:{params.pos} {input} | seqkit grep -svp {params.res} | seqkit seq -nio {output}"
 
-rule filter_arg:
-    input:
-        "analysis/fasta/combined_100.cdhit.mafft"
-    output:
-        "analysis/fasta/combined_100.cdhit.no_arg"
-    params:
-        pos = 94,
-        res = "R"
-    conda:
-        "envs/tools.yaml"
-    shell:
-        "seqkit subseq -r {params.pos}:{params.pos} {input} | seqkit grep -svp {params.res} | seqkit seq -nio {output}"
-
 rule filter_seq:
     input:
         cdhit = "analysis/fasta/combined_100.cdhit",
