@@ -205,9 +205,9 @@ p <- ggtree(as.treedata(tree), aes(color = taxgroup), layout = "circular") +
     # geom_tiplab2(aes(label = label)) +
     geom_tiplab(aes(subset = !is.na(Symbol) & !is.na(Ion), label = Symbol), offset = 0.3) +
     new_scale_color() +
-    geom_text2(aes(label = D85, color = D85, angle = angle - 90, x = 5.8), size = 2) +
-    geom_text2(aes(label = T89, color = T89, angle = angle - 90, x = 6.0), size = 2) +
-    geom_text2(aes(label = D96, color = D96, angle = angle - 90, x = 6.2), size = 2) +
+    geom_text2(aes(label = D85, color = D85, angle = angle - 90, x = 4.0), size = 2) +
+    geom_text2(aes(label = T89, color = T89, angle = angle - 90, x = 4.2), size = 2) +
+    geom_text2(aes(label = D96, color = D96, angle = angle - 90, x = 4.4), size = 2) +
     scale_color_manual(values = clustalx) +
     geom_highlight(mapping = aes(subset = !is.na(hsp), fill = hsp), alpha = 0.1)
 ggsave(output_file, p, width = 10, height = 10)

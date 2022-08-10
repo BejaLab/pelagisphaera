@@ -452,7 +452,7 @@ rule trimal:
     conda:
         "envs/tools.yaml"
     shell:
-        "trimal -in {input} -out {output}"
+        "trimal -in {input} -out {output} -gt {params.gt}"
 
 rule iqtree:
     input:
